@@ -16,6 +16,25 @@ pipeline {
         checkout scm
       }
     }
+stage('Install SFDX CLI & Java check') {
+  steps {
+    sh '''
+      export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+      # install sfdx into the build agent if missing
+      if ! command -v sfdx >/dev/null 2>&1; then
+        echo "Installing sfdx-cli locally..."
+        npm install -g sfdx-cli@latest --no-audit --no-fund
+      else
+        echo "sfdx already installed: $(sfdx --version)"
+      fi
+
+      # sanity checks
+      sfdx --version || true
+      java -version || echo "Java not found; PMD may fail"
+    '''
+  }
+}
 
     
     stage('Authenticate to Salesforce') {
