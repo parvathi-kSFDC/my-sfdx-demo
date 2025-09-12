@@ -38,18 +38,19 @@ stage('Install SFDX CLI & Java check') {
 
     
     stage('Authenticate to Salesforce') {
-      steps {
-        withCredentials([string(credentialsId: 'SF_AUTH_URL', variable: 'SF_AUTH_URL')]) {
-          sh '''
-            echo "Storing SFDX auth URL to file..."
-            echo "$SF_AUTH_URL" > sfdx.auth
-            sfdx auth:sfdxurl:store -f sfdx.auth -s -a CI || { cat sfdx.auth; echo "Auth store failed"; exit 1; }
-            echo "Authenticated. Orgs:"
-            sfdx force:org:list --verbose
-          '''
-        }
-      }
+  steps {
+    withCredentials([string(credentialsId: 'SF_AUTH_URL', variable: 'SF_AUTH_URL')]) {
+      sh '''
+        export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+        echo "Storing SFDX auth URL to file..."
+        echo "$SF_AUTH_URL" > sfdx.auth
+        sfdx auth:sfdxurl:store -f sfdx.auth -s -a CI
+        sfdx force:org:list --verbose
+      '''
     }
+  }
+}
+
 
     stage('SFDX Validation (check-only)') {
       steps {
