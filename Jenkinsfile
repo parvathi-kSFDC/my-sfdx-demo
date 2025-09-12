@@ -17,22 +17,7 @@ pipeline {
       }
     }
 
-    stage('Install SFDX CLI & Java check') {
-      steps {
-        sh '''
-          # install sfdx if not already installed
-          if ! command -v sfdx >/dev/null 2>&1; then
-            echo "Installing sfdx-cli (npm)..."
-            npm install -g sfdx-cli@latest
-          else
-            echo "sfdx found: $(sfdx --version || true)"
-          fi
-          # check java for PMD
-          java -version || echo "Java not found; PMD may fail"
-        '''
-      }
-    }
-
+    
     stage('Authenticate to Salesforce') {
       steps {
         withCredentials([string(credentialsId: 'SF_AUTH_URL', variable: 'SF_AUTH_URL')]) {
