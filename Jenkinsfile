@@ -112,40 +112,42 @@ pipeline {
     }
 
     stage('Run PMD (Apex)') {
-      steps {
-        sh '''
-          # PMD download link (correct format)
-          PMD_URL="https://github.com/pmd/pmd/releases/download/pmd_releases%2F7.4.0/pmd-bin-7.4.0.zip"
+  steps {
+    sh '''
+      # ensure brew path (adjust if needed)
+      export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-          if [ ! -d pmd-bin-${PMD_VER} ]; then
-            echo "Downloading PMD ${PMD_VER}..."
-            curl -L -o pmd.zip "$PMD_URL" || { echo "curl failed"; exit 1; }
-            unzip -q pmd.zip || { echo "unzip failed - pmd.zip may be invalid"; ls -l pmd.zip; exit 1; }
-          fi
+      # install pmd via brew if not present
+      if ! command -v pmd >/dev/null 2>&1; then
+        echo "Installing pmd via brew..."
+        brew update || true
+        brew install pmd || { echo "brew install pmd failed"; exit 1; }
+      else
+        echo "pmd already available: $(pmd --version 2>/dev/null || true)"
+      fi
 
-          # Run PMD on Apex classes (ruleset must exist in repo)
-          ./pmd-bin-${PMD_VER}/bin/run.sh pmd \
-            -d force-app/main/default/classes \
-            -R rulesets/apex-ruleset.xml \
-            -f html -r pmd-report.html \
-            -f xml  -r pmd-report.xml || true
+      # Create output dir
+      mkdir -p pmd-output
 
-          # Optional quality gate: fail if any violation found
-          if [ -f pmd-report.xml ]; then
-            VIOLATIONS=$(grep -c "<violation" pmd-report.xml || true)
-            echo "PMD violations count: ${VIOLATIONS}"
-            # Uncomment to fail on violations:
-            # if [ "$VIOLATIONS" -gt 0 ]; then exit 1; fi
-          fi
-        '''
-      }
-      post {
-        always {
-          archiveArtifacts artifacts: 'pmd-report.*', allowEmptyArchive: true
-        }
-      }
+      # Run PMD on Apex classes, generate xml + html reports
+      pmd -d force-app/main/default/classes -R rulesets/apex-ruleset.xml -f xml -r pmd-output/pmd-report.xml || true
+      pmd -d force-app/main/default/classes -R rulesets/apex-ruleset.xml -f html -r pmd-output/pmd-report.html || true
+
+      # Show small summary
+      if [ -f pmd-output/pmd-report.xml ]; then
+        echo "PMD XML size: $(wc -c < pmd-output/pmd-report.xml) bytes"
+        grep -c "<violation" pmd-output/pmd-report.xml || true
+      else
+        echo "PMD XML not produced!"
+      fi
+    '''
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: 'pmd-output/*', allowEmptyArchive: true
     }
-  } // stages
+  }
+}
 
   post {
     always {
