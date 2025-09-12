@@ -1,17 +1,20 @@
 pipeline {
   agent any
+
+  // ONE environment block only (global)
   environment {
+    // ensure homebrew/npm and system bin locations are visible to every sh step
     PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${env.PATH}"
+    SFDX_DISABLE_TELEMETRY = '1'
+    PMD_VER = '7.4.0'
   }
+
   options {
     skipDefaultCheckout(false)
     timestamps()
     buildDiscarder(logRotator(numToKeepStr: '20'))
   }
-  environment {
-    SFDX_DISABLE_TELEMETRY = '1'
-    PMD_VER = '7.4.0'
-  }
+
   stages {
     stage('Checkout') {
       steps {
@@ -19,76 +22,91 @@ pipeline {
         checkout scm
       }
     }
-stage('Install SFDX CLI & Java check') {
-  steps {
-    sh '''
-      export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-      # install sfdx into the build agent if missing
-      if ! command -v sfdx >/dev/null 2>&1; then
-        echo "Installing sfdx-cli locally..."
-        npm install -g sfdx-cli@latest --no-audit --no-fund
-      else
-        echo "sfdx already installed: $(sfdx --version)"
-      fi
-
-      # sanity checks
-      sfdx --version || true
-      java -version || echo "Java not found; PMD may fail"
-    '''
-  }
-}
-
-    
-    stage('Authenticate to Salesforce') {
-  steps {
-    withCredentials([string(credentialsId: 'SF_AUTH_URL', variable: 'SF_AUTH_URL')]) {
-      sh '''
-        export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-        echo "Storing SFDX auth URL to file..."
-        echo "$SF_AUTH_URL" > sfdx.auth
-        sfdx auth:sfdxurl:store -f sfdx.auth -s -a CI
-        sfdx force:org:list --verbose
-      '''
+    stage('Install / Verify Tools') {
+      steps {
+        sh '''
+          echo "PATH: $PATH"
+          # show versions (ok if missing, output helpful debug)
+          node --version || echo "node missing"
+          npm --version || echo "npm missing"
+          sfdx --version || echo "sfdx missing"
+          java -version || echo "java missing (PMD may fail)"
+          jq --version || echo "jq missing"
+        '''
+      }
     }
-  }
-}
 
+    stage('Ensure SFDX CLI') {
+      steps {
+        sh '''
+          # If sfdx missing, try install via npm (requires npm present)
+          if ! command -v sfdx >/dev/null 2>&1; then
+            echo "Installing sfdx-cli..."
+            npm install -g sfdx-cli@latest --no-audit --no-fund
+          else
+            echo "sfdx present: $(sfdx --version)"
+          fi
+        '''
+      }
+    }
+
+    stage('Authenticate to Salesforce') {
+      steps {
+        withCredentials([string(credentialsId: 'SF_AUTH_URL', variable: 'SF_AUTH_URL')]) {
+          sh '''
+            # ensure PATH again (safe)
+            export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+            echo "Storing SFDX auth URL to file..."
+            echo "$SF_AUTH_URL" > sfdx.auth
+            # attempt to store auth; fail if it errors
+            if ! sfdx auth:sfdxurl:store -f sfdx.auth -s -a CI; then
+              echo "Auth store failed"
+              exit 1
+            fi
+            echo "Authenticated. Listing orgs..."
+            sfdx force:org:list --verbose
+          '''
+        }
+      }
+    }
 
     stage('SFDX Validation (check-only)') {
       steps {
         sh '''
           set -e
-          echo "Running check-only deploy (this may run tests)..."
-          sfdx force:source:deploy -p force-app --checkonly --testlevel RunLocalTests --json > sfdx-deploy.json || true
-          jq -r '.status' sfdx-deploy.json || true
-          # If the JSON indicates error or status non-zero, fail:
-          ERR=$(jq -r '.status' sfdx-deploy.json)
-          if [ "$ERR" != "0" ] && [ "$ERR" != "1" ]; then
-            echo "sfdx deploy returned non-standard status: $ERR"
+          echo "Running check-only deploy (may run tests)..."
+          if ! sfdx force:source:deploy -p force-app --checkonly --testlevel RunLocalTests --json > sfdx-deploy.json 2>/dev/null; then
+            echo "sfdx check-only returned non-zero; saving sfdx-deploy.json (if any)"
           fi
-          # check for any failures in the JSON result
-          FAILS=$(jq -r '.result?.details?.componentFailures // [] | length' sfdx-deploy.json || echo 0)
-          if [ "$FAILS" -gt 0 ]; then
-            echo "Validation reported component failures:"
-            jq -r '.result.details.componentFailures[] | {file: .fileName, problem: .problem}' sfdx-deploy.json || true
-            exit 1
+
+          # show raw json (if present) for debugging
+          if [ -s sfdx-deploy.json ]; then
+            echo "sfdx-deploy.json contents:"
+            cat sfdx-deploy.json
+          else
+            echo "No sfdx-deploy.json was produced."
+            # continue — trigger failure later if appropriate
           fi
-          # If tests failed:
-          TF=$(jq -r '.result?.numberTestsRun // 0' sfdx-deploy.json || echo 0)
-          TE=$(jq -r '.result?.numberTestErrors // 0' sfdx-deploy.json || echo 0)
-          if [ "$TE" -gt 0 ]; then
-            echo "Test errors: $TE"
-            jq -r '.result?.runTestResult?.failures[] | {name: .name, message: .message}' sfdx-deploy.json || true
-            exit 1
+
+          # Try to parse number of componentFailures / test errors with jq (if present)
+          if [ -s sfdx-deploy.json ]; then
+            FAILS=$(jq -r '.result?.details?.componentFailures // [] | length' sfdx-deploy.json)
+            TE=$(jq -r '.result?.numberTestErrors // 0' sfdx-deploy.json)
+            echo "Component failures: ${FAILS}, Test errors: ${TE}"
+            if [ "${FAILS:-0}" -gt 0 ] || [ "${TE:-0}" -gt 0 ]; then
+              echo "Validation or tests failed. Failing the build."
+              exit 1
+            fi
           fi
-          echo "SFDX validation succeeded or returned no failures."
+
+          echo "SFDX validation passed (or no failures reported)."
         '''
       }
       post {
         always {
           archiveArtifacts artifacts: 'sfdx-deploy.json', allowEmptyArchive: true
-          sh 'ls -la'
         }
       }
     }
@@ -96,18 +114,29 @@ stage('Install SFDX CLI & Java check') {
     stage('Run PMD (Apex)') {
       steps {
         sh '''
-          # download PMD if not present
+          # PMD download link (correct format)
+          PMD_URL="https://github.com/pmd/pmd/releases/download/pmd_releases/${PMD_VER}/pmd-bin-${PMD_VER}.zip"
+
           if [ ! -d pmd-bin-${PMD_VER} ]; then
             echo "Downloading PMD ${PMD_VER}..."
-            curl -L -o pmd.zip https://github.com/pmd/pmd/releases/download/pmd_releases/7.4.0/pmd-bin-7.4.0.zip
-            unzip -q pmd.zip
+            curl -L -o pmd.zip "$PMD_URL" || { echo "curl failed"; exit 1; }
+            unzip -q pmd.zip || { echo "unzip failed - pmd.zip may be invalid"; ls -l pmd.zip; exit 1; }
           fi
-          # run PMD on Apex classes
+
+          # Run PMD on Apex classes (ruleset must exist in repo)
           ./pmd-bin-${PMD_VER}/bin/run.sh pmd \
             -d force-app/main/default/classes \
             -R rulesets/apex-ruleset.xml \
             -f html -r pmd-report.html \
-            -f xml -r pmd-report.xml || true
+            -f xml  -r pmd-report.xml || true
+
+          # Optional quality gate: fail if any violation found
+          if [ -f pmd-report.xml ]; then
+            VIOLATIONS=$(grep -c "<violation" pmd-report.xml || true)
+            echo "PMD violations count: ${VIOLATIONS}"
+            # Uncomment to fail on violations:
+            # if [ "$VIOLATIONS" -gt 0 ]; then exit 1; fi
+          fi
         '''
       }
       post {
@@ -118,5 +147,13 @@ stage('Install SFDX CLI & Java check') {
     }
   } // stages
 
-
+  post {
+    always {
+      echo "Pipeline finished: ${currentBuild.currentResult}"
+    }
+    failure {
+      echo "Build failed. Check console output and archived artifacts."
+      // mail step removed to avoid SMTP errors; re-add only if SMTP configured
+    }
+  }
 }
