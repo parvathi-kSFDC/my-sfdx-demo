@@ -39,9 +39,10 @@ pipeline {
     stage('Ensure SFDX CLI') {
       steps {
         sh '''
+          # If sfdx missing, try install via npm (requires npm present)
           if ! command -v sfdx >/dev/null 2>&1; then
             echo "Installing sfdx-cli..."
-            npm install -g sfdx-cli@latest --no-audit --no-fund
+            npm install -g sfdx-cli@latest --no-audit --no-fund || { echo "npm install sfdx-cli failed"; exit 1; }
           else
             echo "sfdx present: $(sfdx --version)"
           fi
@@ -53,9 +54,12 @@ pipeline {
       steps {
         withCredentials([string(credentialsId: 'SF_AUTH_URL', variable: 'SF_AUTH_URL')]) {
           sh '''
+            # ensure PATH again (safe)
             export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
             echo "Storing SFDX auth URL to file..."
             echo "$SF_AUTH_URL" > sfdx.auth
+            # attempt to store auth; fail if it errors
             if ! sfdx auth:sfdxurl:store -f sfdx.auth -s -a CI; then
               echo "Auth store failed"
               exit 1
@@ -70,32 +74,63 @@ pipeline {
     stage('SFDX Validation (check-only)') {
       steps {
         sh '''
-          set -e
-          echo "Running check-only deploy (may run tests)..."
-          if ! sfdx force:source:deploy -p force-app --checkonly --testlevel RunLocalTests --json > sfdx-deploy.json 2>/dev/null; then
-            echo "sfdx check-only returned non-zero; saving sfdx-deploy.json (if any)"
-          fi
+          #!/bin/bash
+          # Ensure npm global bin in PATH (so npm-installed sfdx is found)
+          export PATH="$(npm bin -g 2>/dev/null):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
+          echo "Running check-only deploy (may run tests)..."
+          # allow non-zero so we can inspect json output even when deploy fails
+          set +e
+
+          # Remove any old outputs
+          rm -f sfdx-deploy.json sfdx-deploy.stderr
+
+          # Run sfdx and capture JSON stdout + stderr separately
+          sfdx force:source:deploy -p force-app --checkonly --testlevel RunLocalTests --json > sfdx-deploy.json 2> sfdx-deploy.stderr
+          SFDX_EXIT=$?
+
+          echo "sfdx exit code: ${SFDX_EXIT}"
+          echo "----- sfdx stderr (if any) -----"
+          if [ -s sfdx-deploy.stderr ]; then
+            cat sfdx-deploy.stderr
+          else
+            echo "(no stderr)"
+          fi
+          echo "--------------------------------"
+
+          # If we have JSON output, parse it
           if [ -s sfdx-deploy.json ]; then
             echo "sfdx-deploy.json contents:"
-            cat sfdx-deploy.json
-            FAILS=$(jq -r '.result?.details?.componentFailures // [] | length' sfdx-deploy.json)
-            TE=$(jq -r '.result?.numberTestErrors // 0' sfdx-deploy.json)
+            jq . sfdx-deploy.json || cat sfdx-deploy.json
+
+            # Extract component failure count and number test errors
+            FAILS=$(jq -r '.result?.details?.componentFailures // [] | length' sfdx-deploy.json 2>/dev/null || echo 0)
+            TE=$(jq -r '.result?.numberTestErrors // 0' sfdx-deploy.json 2>/dev/null || echo 0)
+
             echo "Component failures: ${FAILS}, Test errors: ${TE}"
+
             if [ "${FAILS:-0}" -gt 0 ] || [ "${TE:-0}" -gt 0 ]; then
               echo "Validation or tests failed. Failing the build."
               exit 1
             fi
+
+            # If sfdx exited non-zero but JSON shows no failures, treat as success for now.
+            # If you prefer to fail whenever sfdx exit != 0, uncomment the following line:
+            # exit ${SFDX_EXIT}
+
           else
-            echo "No sfdx-deploy.json was produced."
+            # No JSON produced — fatal (likely CLI crash, auth fail, or unexpected error)
+            echo "ERROR: sfdx did NOT produce sfdx-deploy.json. See stderr above."
+            echo "Check authentication, CLI version, or whether sfdx crashed."
+            exit 1
           fi
 
-          echo "SFDX validation passed (or no failures reported)."
+          echo "SFDX validation passed (no component failures or test errors)."
         '''
       }
       post {
         always {
-          archiveArtifacts artifacts: 'sfdx-deploy.json', allowEmptyArchive: true
+          archiveArtifacts artifacts: 'sfdx-deploy.json, sfdx-deploy.stderr', allowEmptyArchive: true
         }
       }
     }
@@ -117,6 +152,7 @@ pipeline {
           mkdir -p pmd-output
 
           # Run PMD on Apex classes, generate xml + html reports
+          # adjust ruleset path if needed (rulesets/apex-ruleset.xml in repo)
           pmd -d force-app/main/default/classes -R rulesets/apex-ruleset.xml -f xml -r pmd-output/pmd-report.xml || true
           pmd -d force-app/main/default/classes -R rulesets/apex-ruleset.xml -f html -r pmd-output/pmd-report.html || true
 
@@ -142,7 +178,6 @@ pipeline {
     }
     failure {
       echo "Build failed. Check console output and archived artifacts."
-      // mail step removed to avoid SMTP errors; re-add only if SMTP configured
     }
   }
 }
