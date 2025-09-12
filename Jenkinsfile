@@ -27,7 +27,6 @@ pipeline {
       steps {
         sh '''
           echo "PATH: $PATH"
-          # show versions (ok if missing, output helpful debug)
           node --version || echo "node missing"
           npm --version || echo "npm missing"
           sfdx --version || echo "sfdx missing"
@@ -40,7 +39,6 @@ pipeline {
     stage('Ensure SFDX CLI') {
       steps {
         sh '''
-          # If sfdx missing, try install via npm (requires npm present)
           if ! command -v sfdx >/dev/null 2>&1; then
             echo "Installing sfdx-cli..."
             npm install -g sfdx-cli@latest --no-audit --no-fund
@@ -55,12 +53,9 @@ pipeline {
       steps {
         withCredentials([string(credentialsId: 'SF_AUTH_URL', variable: 'SF_AUTH_URL')]) {
           sh '''
-            # ensure PATH again (safe)
             export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-
             echo "Storing SFDX auth URL to file..."
             echo "$SF_AUTH_URL" > sfdx.auth
-            # attempt to store auth; fail if it errors
             if ! sfdx auth:sfdxurl:store -f sfdx.auth -s -a CI; then
               echo "Auth store failed"
               exit 1
@@ -81,17 +76,9 @@ pipeline {
             echo "sfdx check-only returned non-zero; saving sfdx-deploy.json (if any)"
           fi
 
-          # show raw json (if present) for debugging
           if [ -s sfdx-deploy.json ]; then
             echo "sfdx-deploy.json contents:"
             cat sfdx-deploy.json
-          else
-            echo "No sfdx-deploy.json was produced."
-            # continue — trigger failure later if appropriate
-          fi
-
-          # Try to parse number of componentFailures / test errors with jq (if present)
-          if [ -s sfdx-deploy.json ]; then
             FAILS=$(jq -r '.result?.details?.componentFailures // [] | length' sfdx-deploy.json)
             TE=$(jq -r '.result?.numberTestErrors // 0' sfdx-deploy.json)
             echo "Component failures: ${FAILS}, Test errors: ${TE}"
@@ -99,6 +86,8 @@ pipeline {
               echo "Validation or tests failed. Failing the build."
               exit 1
             fi
+          else
+            echo "No sfdx-deploy.json was produced."
           fi
 
           echo "SFDX validation passed (or no failures reported)."
@@ -112,42 +101,40 @@ pipeline {
     }
 
     stage('Run PMD (Apex)') {
-  steps {
-    sh '''
-      # ensure brew path (adjust if needed)
-      export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+      steps {
+        sh '''
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-      # install pmd via brew if not present
-      if ! command -v pmd >/dev/null 2>&1; then
-        echo "Installing pmd via brew..."
-        brew update || true
-        brew install pmd || { echo "brew install pmd failed"; exit 1; }
-      else
-        echo "pmd already available: $(pmd --version 2>/dev/null || true)"
-      fi
+          # Use Homebrew-installed pmd if available, else install
+          if ! command -v pmd >/dev/null 2>&1; then
+            echo "Installing pmd via brew..."
+            brew update || true
+            brew install pmd || { echo "brew install pmd failed"; exit 1; }
+          else
+            echo "pmd already available: $(pmd --version 2>/dev/null || true)"
+          fi
 
-      # Create output dir
-      mkdir -p pmd-output
+          mkdir -p pmd-output
 
-      # Run PMD on Apex classes, generate xml + html reports
-      pmd -d force-app/main/default/classes -R rulesets/apex-ruleset.xml -f xml -r pmd-output/pmd-report.xml || true
-      pmd -d force-app/main/default/classes -R rulesets/apex-ruleset.xml -f html -r pmd-output/pmd-report.html || true
+          # Run PMD on Apex classes, generate xml + html reports
+          pmd -d force-app/main/default/classes -R rulesets/apex-ruleset.xml -f xml -r pmd-output/pmd-report.xml || true
+          pmd -d force-app/main/default/classes -R rulesets/apex-ruleset.xml -f html -r pmd-output/pmd-report.html || true
 
-      # Show small summary
-      if [ -f pmd-output/pmd-report.xml ]; then
-        echo "PMD XML size: $(wc -c < pmd-output/pmd-report.xml) bytes"
-        grep -c "<violation" pmd-output/pmd-report.xml || true
-      else
-        echo "PMD XML not produced!"
-      fi
-    '''
-  }
-  post {
-    always {
-      archiveArtifacts artifacts: 'pmd-output/*', allowEmptyArchive: true
+          if [ -f pmd-output/pmd-report.xml ]; then
+            echo "PMD XML size: $(wc -c < pmd-output/pmd-report.xml) bytes"
+            grep -c "<violation" pmd-output/pmd-report.xml || true
+          else
+            echo "PMD XML not produced!"
+          fi
+        '''
+      }
+      post {
+        always {
+          archiveArtifacts artifacts: 'pmd-output/*', allowEmptyArchive: true
+        }
+      }
     }
-  }
-}
+  } // end stages
 
   post {
     always {
@@ -158,5 +145,4 @@ pipeline {
       // mail step removed to avoid SMTP errors; re-add only if SMTP configured
     }
   }
-}
 }
