@@ -1,5 +1,8 @@
 pipeline {
   agent any
+  environment {
+    PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${env.PATH}"
+  }
   options {
     skipDefaultCheckout(false)
     timestamps()
@@ -96,7 +99,7 @@ stage('Install SFDX CLI & Java check') {
           # download PMD if not present
           if [ ! -d pmd-bin-${PMD_VER} ]; then
             echo "Downloading PMD ${PMD_VER}..."
-            curl -L -o pmd.zip https://github.com/pmd/pmd/releases/download/pmd_releases%2F${PMD_VER}/pmd-bin-${PMD_VER}.zip
+            curl -L -o pmd.zip https://github.com/pmd/pmd/releases/download/pmd_releases/7.4.0/pmd-bin-7.4.0.zip
             unzip -q pmd.zip
           fi
           # run PMD on Apex classes
