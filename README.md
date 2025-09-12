@@ -1,18 +1,93 @@
-# Salesforce DX Project: Next Steps
+SFDX + Jenkins + PMD Integration
 
-Now that you’ve created a Salesforce DX project, what’s next? Here are some documentation resources to get you started.
+This project demonstrates Salesforce DX (SFDX) development with Jenkins CI/CD and PMD code quality checks.
 
-## How Do You Plan to Deploy Your Changes?
+🔹 Branch Strategy
 
-Do you want to deploy a set of changes, or create a self-contained application? Choose a [development model](https://developer.salesforce.com/tools/vscode/en/user-guide/development-models).
+main → Production-ready code.
 
-## Configure Your Salesforce DX Project
+develop → Active development branch.
 
-The `sfdx-project.json` file contains useful configuration information for your project. See [Salesforce DX Project Configuration](https://developer.salesforce.com/docs/atlas.en-us.sfdx_dev.meta/sfdx_dev/sfdx_dev_ws_config.htm) in the _Salesforce DX Developer Guide_ for details about this file.
+feature/* → Short-lived branches for new features or bug fixes.
 
-## Read All About It -- update...
+🔹 Branch Protection Rules
 
-- [Salesforce Extensions Documentation](https://developer.salesforce.com/tools/vscode/)
-- [Salesforce CLI Setup Guide](https://developer.salesforce.com/docs/atlas.en-us.sfdx_setup.meta/sfdx_setup/sfdx_setup_intro.htm)
-- [Salesforce DX Developer Guide](https://developer.salesforce.com/docs/atlas.en-us.sfdx_dev.meta/sfdx_dev/sfdx_dev_intro.htm)
-- [Salesforce CLI Command Reference](https://developer.salesforce.com/docs/atlas.en-us.sfdx_cli_reference.meta/sfdx_cli_reference/cli_reference.htm)
+Configured in GitHub under Settings → Branches:
+
+main and develop are protected.
+
+Direct pushes are blocked.
+
+Pull Requests are required.
+
+At least 1 reviewer approval is mandatory.
+
+Jenkins status checks must pass before merging.
+
+🔹 Jenkins CI/CD Setup
+
+Pipeline type: Multibranch Pipeline (auto-discovers branches + PRs).
+
+Jenkins authenticates with GitHub using a Personal Access Token (PAT).
+
+Jenkinsfile defines the pipeline stages:
+
+Checkout repository
+
+Install/verify tools (Node, NPM, SFDX, Java, jq)
+
+Ensure SFDX CLI is available
+
+Authenticate with Salesforce (via stored SFDX Auth URL)
+
+SFDX Validation Deploy (--checkonly) with test execution
+
+Run PMD Apex static analysis
+
+Archive reports as build artifacts
+
+🔹 PMD Integration
+
+PMD installed via Homebrew on Jenkins agent.
+
+Custom ruleset file: apex-ruleset.xml in repo.
+
+Reports generated:
+
+pmd-output/pmd-report.xml
+
+pmd-output/pmd-report.html
+
+Artifacts archived for review in Jenkins.
+
+Violations highlighted during PR checks.
+
+🔹 Pull Request Workflow
+
+Developer raises PR → feature/* → develop.
+
+Jenkins runs automatically on PR:
+
+SFDX validation deploy
+
+RunLocalTests
+
+PMD static analysis
+
+Jenkins posts PR status back to GitHub.
+
+PR merge is blocked until:
+
+Jenkins checks pass ✅
+
+Reviewer approval is given ✅
+
+✅ Benefits
+
+Enforces clean deployments (validation-only).
+
+Ensures code quality with PMD.
+
+Prevents direct pushes to protected branches.
+
+Provides instant feedback on PRs via Jenkins → GitHub integration.
