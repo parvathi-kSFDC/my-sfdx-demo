@@ -115,7 +115,7 @@ pipeline {
       steps {
         sh '''
           # PMD download link (correct format)
-          PMD_URL="https://github.com/pmd/pmd/releases/download/pmd_releases/${PMD_VER}/pmd-bin-${PMD_VER}.zip"
+          PMD_URL="PMD_URL="https://github.com/pmd/pmd/releases/download/pmd_releases%2F7.4.0/pmd-bin-7.4.0.zip"
 
           if [ ! -d pmd-bin-${PMD_VER} ]; then
             echo "Downloading PMD ${PMD_VER}..."
