@@ -234,6 +234,7 @@ stage('Run PMD (Apex)') {
       export JAVA_HOME="$(
         /usr/libexec/java_home -v 17
       )" || { echo "JDK 17 not found"; exit 1; }
+      export PATH="$JAVA_HOME/bin:$PATH"   # ✅ ensure 'java' resolves to JDK 17
 
       mkdir -p pmd-output
 
@@ -255,6 +256,8 @@ stage('Run PMD (Apex)') {
       fi
 
       echo "Running PMD ${PMD_VERSION} on $APEX_COUNT Apex files..."
+      "${PMD_DIR}/bin/pmd" --version   # 🔍 sanity check
+
       "${PMD_DIR}/bin/pmd" check \
         -d "$TARGET_DIR" \
         -R "$RULESET" \
@@ -276,12 +279,9 @@ stage('Run PMD (Apex)') {
   post {
     always {
       archiveArtifacts artifacts: 'pmd-output/*', allowEmptyArchive: false
-      // If you use Warnings NG:
-      // recordIssues enabledForFailure: true, tools: [pmdParser(pattern: 'pmd-output/pmd-report.xml')]
     }
   }
 }
-
 
 
   } // end stages
