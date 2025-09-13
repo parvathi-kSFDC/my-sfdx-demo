@@ -66,18 +66,19 @@ pipeline {
       sh '''
         set -e
         export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
         echo "$SF_AUTH_URL" > sfdx.auth
 
-        # Use sf (new CLI). This sets alias CI and default org.
+        # Login (sets alias CI + default org)
         sf org login sfdx-url \
           --sfdx-url-file sfdx.auth \
           --alias CI \
           --set-default
 
-          # Always create reports dir before writing
+        # Ensure reports dir exists before writing
         mkdir -p reports
 
-        # Quick sanity check
+        # Save org details
         sf org display --target-org CI --verbose --json > reports/sf-org.json
       '''
     }
