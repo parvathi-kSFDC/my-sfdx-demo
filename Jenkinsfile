@@ -51,54 +51,65 @@ pipeline {
     }
 
     stage('Authenticate to Salesforce') {
-      steps {
-        withCredentials([string(credentialsId: 'SF_AUTH_URL', variable: 'SF_AUTH_URL')]) {
-          sh '''
-            export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-            echo "Storing SFDX auth URL to file..."
-            echo "$SF_AUTH_URL" > sfdx.auth
-            if ! sfdx auth:sfdxurl:store -f sfdx.auth -s -a CI; then
-              echo "Auth store failed"
-              exit 1
-            fi
-            echo "Authenticated. Listing orgs..."
-            sfdx force:org:list --verbose
-          '''
-        }
-      }
+  steps {
+    withCredentials([string(credentialsId: 'SF_AUTH_URL', variable: 'SF_AUTH_URL')]) {
+      sh '''
+        export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+        echo "Storing SFDX auth URL to file..."
+        echo "$SF_AUTH_URL" > sfdx.auth
+        sfdx auth:sfdxurl:store -f sfdx.auth -s -a CI
+
+        echo "Authenticated. Listing orgs..."
+        sfdx force:org:list --verbose
+
+        # NEW: confirm sf can see the alias too
+        sf org display --target-org CI || { echo "sf cannot see alias CI"; exit 1; }
+      '''
     }
+  }
+}
+
 
 stage('SFDX Validation (check-only)') {
   steps {
     sh '''
       set -e
-      echo "Running check-only deploy (RunLocalTests)..."
+      echo "Running check-only validate (RunLocalTests) with sf CLI..."
       mkdir -p reports
 
-      sfdx force:source:deploy \
-        -p force-app \
-        --checkonly \
-        --testlevel RunLocalTests \
-        --json > reports/sfdx-deploy.json || true
+      # Use source dir; if you prefer package.xml, swap to --manifest manifest/package.xml
+      sf project deploy validate \
+        --source-dir force-app \
+        --target-org CI \
+        --test-level RunLocalTests \
+        --ignore-warnings \
+        --wait 60 \
+        --json > reports/sf-validate.json || true
 
-      # Parse result robustly (componentFailures can be object or array)
+      # Robust parse & fail on errors
       python3 - <<'PY'
 import json, sys
-with open("reports/sfdx-deploy.json") as f:
-  data=json.load(f)
-res=data.get("result", {})
-status_ok = (res.get("status")==0) or res.get("success", False)
+p='reports/sf-validate.json'
+try:
+  data=json.load(open(p))
+except Exception as e:
+  print("No or invalid JSON:", e); sys.exit(1)
 
-det = res.get("details", {}) or {}
-cf = det.get("componentFailures", [])
+res=data.get('result', {}) or {}
+# sf returns "success" boolean; also keep an eye on status
+success = bool(res.get('success', False)) or res.get('status') in (0, '0')
+
+det = res.get('details', {}) or {}
+# component failures may be object or list
+cf = det.get('componentFailures', [])
 if isinstance(cf, dict): cf=[cf]
-has_cf = len(cf)>0
+has_cf = len(cf) > 0
 
-rtr = det.get("runTestResult", {}) or {}
-num_fail = int(rtr.get("numFailures", 0) or 0)
+rtr = det.get('runTestResult', {}) or {}
+num_fail = int(rtr.get('numFailures', 0) or 0)
 
-if (not status_ok) or has_cf or num_fail>0:
-  print(f"Validation failed: status_ok={status_ok}, compFailures={len(cf)}, testFailures={num_fail}")
+if (not success) or has_cf or num_fail > 0:
+  print(f"Validation failed: success={success}, compFailures={len(cf)}, testFailures={num_fail}")
   sys.exit(1)
 else:
   print("Validation OK.")
@@ -107,10 +118,11 @@ PY
   }
   post {
     always {
-      archiveArtifacts artifacts: 'reports/sfdx-deploy.json', allowEmptyArchive: true
+      archiveArtifacts artifacts: 'reports/sf-validate.json', allowEmptyArchive: true
     }
   }
 }
+
 
 
 stage('Run PMD (Apex)') {
