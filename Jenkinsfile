@@ -74,6 +74,9 @@ pipeline {
           --alias CI \
           --set-default
 
+          # Always create reports dir before writing
+        mkdir -p reports
+
         # Quick sanity check
         sf org display --target-org CI --verbose --json > reports/sf-org.json
       '''
