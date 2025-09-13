@@ -123,6 +123,28 @@ PY
   }
 }
 
+stage('Install Java + PMD') {
+  steps {
+    sh '''
+      set -e
+      export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+      # --- Ensure Java 17+ ---
+      if ! command -v java >/dev/null 2>&1; then
+        echo "Installing Java 17..."
+        brew install --cask temurin17 || brew install --cask zulu17
+      fi
+      java -version
+
+      # --- Ensure PMD 7.x ---
+      if ! command -v pmd >/dev/null 2>&1; then
+        echo "Installing PMD..."
+        brew install pmd
+      fi
+      pmd --version || true
+    '''
+  }
+}
 
 
 stage('Run PMD (Apex)') {
@@ -131,46 +153,37 @@ stage('Run PMD (Apex)') {
       set -e
       export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-      # Ensure Java 17+ for PMD
-      if ! command -v java >/dev/null 2>&1; then
-        echo "Installing Java 17..."
-        brew install --cask temurin17 || brew install --cask zulu17 || true
-      fi
-      java -version || { echo "Java not available; PMD needs Java 17+"; exit 1; }
-
-      # Ensure PMD (Homebrew provides PMD 7.x on mac)
-      if ! command -v pmd >/dev/null 2>&1; then
-        echo "Installing PMD..."
-        brew install pmd
-      fi
-      pmd --version || true
-
       mkdir -p pmd-output
 
       # pick target dir (fallback if classes folder isn’t present)
       TARGET_DIR="force-app/main/default/classes"
       [ -d "$TARGET_DIR" ] || TARGET_DIR="force-app"
 
-      # ruleset path from env (you added RULESET above)
+      RULESET="rulesets/apex-ruleset.xml"
       [ -f "$RULESET" ] || { echo "Ruleset $RULESET not found"; ls -la rulesets || true; exit 1; }
 
-      # PMD **7** syntax uses the 'check' subcommand
+      # PMD 7 uses the 'check' subcommand
       pmd check -d "$TARGET_DIR" -R "$RULESET" -f xml  -r pmd-output/pmd-report.xml  || true
       pmd check -d "$TARGET_DIR" -R "$RULESET" -f html -r pmd-output/pmd-report.html || true
 
-      # must exist to avoid empty archives
       [ -s pmd-output/pmd-report.xml ] || { echo "PMD XML not produced"; exit 1; }
 
-      echo "Violations: $(grep -c "<violation" pmd-output/pmd-report.xml || echo 0)"
+      # OPTIONAL: fail build on any violations
+      VIOL=$(grep -c "<violation" pmd-output/pmd-report.xml || echo 0)
+      echo "PMD violations: $VIOL"
+      # uncomment next line if you want failures to break the build
+      # [ "$VIOL" -gt 0 ] && { echo "Failing due to PMD violations"; exit 1; }
     '''
   }
   post {
     always {
       archiveArtifacts artifacts: 'pmd-output/*', allowEmptyArchive: false
-      recordIssues enabledForFailure: true, tools: [pmdParser(pattern: 'pmd-output/pmd-report.xml')]
+      // comment this out unless you install the Warnings NG plugin
+      // recordIssues enabledForFailure: true, tools: [pmdParser(pattern: 'pmd-output/pmd-report.xml')]
     }
   }
 }
+
 
   } // end stages
 
