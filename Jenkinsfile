@@ -37,47 +37,62 @@ pipeline {
       }
     }
 
-    stage('Ensure SFDX CLI') {
-      steps {
-        sh '''
-          if ! command -v sfdx >/dev/null 2>&1; then
-            echo "Installing sfdx-cli..."
-            npm install -g sfdx-cli@latest --no-audit --no-fund
-          else
-            echo "sfdx present: $(sfdx --version)"
-          fi
-        '''
-      }
-    }
+    stage('Ensure Salesforce CLI (sf)') {
+  steps {
+    sh '''
+      set -e
+      export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-    stage('Authenticate to Salesforce') {
+      # Uninstall legacy sfdx-cli if present on PATH to avoid conflicts
+      if command -v sfdx >/dev/null 2>&1; then
+        echo "Legacy sfdx-cli detected: $(sfdx --version || true)"
+        npm uninstall -g sfdx-cli || true
+      fi
+
+      # Ensure new Salesforce CLI
+      if ! command -v sf >/dev/null 2>&1; then
+        echo "Installing @salesforce/cli (sf)..."
+        npm install -g @salesforce/cli@latest --no-audit --no-fund
+      fi
+      sf --version
+    '''
+  }
+}
+
+
+   stage('Authenticate to Salesforce') {
   steps {
     withCredentials([string(credentialsId: 'SF_AUTH_URL', variable: 'SF_AUTH_URL')]) {
       sh '''
+        set -e
         export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-        echo "Storing SFDX auth URL to file..."
         echo "$SF_AUTH_URL" > sfdx.auth
-        sfdx auth:sfdxurl:store -f sfdx.auth -s -a CI
 
-        echo "Authenticated. Listing orgs..."
-        sfdx force:org:list --verbose
+        # Use sf (new CLI). This sets alias CI and default org.
+        sf org login sfdx-url \
+          --sfdx-url-file sfdx.auth \
+          --alias CI \
+          --set-default
 
-        # NEW: confirm sf can see the alias too
-        sf org display --target-org CI || { echo "sf cannot see alias CI"; exit 1; }
+        # Quick sanity check
+        sf org display --target-org CI --verbose --json > reports/sf-org.json
       '''
     }
   }
+  post {
+    always {
+      archiveArtifacts artifacts: 'reports/sf-org.json', allowEmptyArchive: true
+    }
+  }
 }
+
 
 
 stage('SFDX Validation (check-only)') {
   steps {
     sh '''
       set -e
-      echo "Running check-only validate (RunLocalTests) with sf CLI..."
       mkdir -p reports
-
-      # Use source dir; if you prefer package.xml, swap to --manifest manifest/package.xml
       sf project deploy validate \
         --source-dir force-app \
         --target-org CI \
@@ -86,33 +101,22 @@ stage('SFDX Validation (check-only)') {
         --wait 60 \
         --json > reports/sf-validate.json || true
 
-      # Robust parse & fail on errors
+      [ -s reports/sf-validate.json ] || { echo "No sf-validate.json produced"; exit 1; }
+
       python3 - <<'PY'
 import json, sys
-p='reports/sf-validate.json'
-try:
-  data=json.load(open(p))
-except Exception as e:
-  print("No or invalid JSON:", e); sys.exit(1)
-
-res=data.get('result', {}) or {}
-# sf returns "success" boolean; also keep an eye on status
-success = bool(res.get('success', False)) or res.get('status') in (0, '0')
-
-det = res.get('details', {}) or {}
-# component failures may be object or list
-cf = det.get('componentFailures', [])
-if isinstance(cf, dict): cf=[cf]
-has_cf = len(cf) > 0
-
-rtr = det.get('runTestResult', {}) or {}
-num_fail = int(rtr.get('numFailures', 0) or 0)
-
-if (not success) or has_cf or num_fail > 0:
-  print(f"Validation failed: success={success}, compFailures={len(cf)}, testFailures={num_fail}")
+d=json.load(open('reports/sf-validate.json'))
+res=d.get('result',{}) or {}
+success=bool(res.get('success',False)) or res.get('status') in (0,'0')
+det=res.get('details',{}) or {}
+cf=det.get('componentFailures',[])
+if isinstance(cf,dict): cf=[cf]
+rtr=det.get('runTestResult',{}) or {}
+nf=int(rtr.get('numFailures',0) or 0)
+if (not success) or len(cf)>0 or nf>0:
+  print(f"Validation failed: success={success}, compFailures={len(cf)}, testFailures={nf}")
   sys.exit(1)
-else:
-  print("Validation OK.")
+print("Validation OK.")
 PY
     '''
   }
@@ -122,6 +126,7 @@ PY
     }
   }
 }
+
 
 stage('Install Java + PMD') {
   steps {
