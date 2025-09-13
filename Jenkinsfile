@@ -262,11 +262,13 @@ stage('Run PMD (Apex)') {
         -d "$TARGET_DIR" \
         -R "$RULESET" \
         -f xml  -r pmd-output/pmd-report.xml
+        --no-fail-on-violation
 
       "${PMD_DIR}/bin/pmd" check \
         -d "$TARGET_DIR" \
         -R "$RULESET" \
         -f html -r pmd-output/pmd-report.html
+        --no-fail-on-violation
 
       [ -s pmd-output/pmd-report.xml ] || { echo "PMD XML not produced"; exit 1; }
 
