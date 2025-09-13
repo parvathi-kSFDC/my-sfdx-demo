@@ -60,21 +60,26 @@ pipeline {
 }
 
 
-   stage('Authenticate to Salesforce') {
+  stage('Authenticate to Salesforce') {
   steps {
     withCredentials([string(credentialsId: 'SF_AUTH_URL', variable: 'SF_AUTH_URL')]) {
       sh '''
         set -e
         export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+        # Write the sfdx auth URL to a file (masked in logs)
         echo "$SF_AUTH_URL" > sfdx.auth
 
-        # Use sf (new CLI). This sets alias CI and default org.
+        # Login using the new sf CLI
         sf org login sfdx-url \
           --sfdx-url-file sfdx.auth \
           --alias CI \
           --set-default
 
-        # Quick sanity check
+        # Ensure the output folder exists
+        mkdir -p reports
+
+        # Save org details for archiving/debug
         sf org display --target-org CI --verbose --json > reports/sf-org.json
       '''
     }
@@ -85,6 +90,7 @@ pipeline {
     }
   }
 }
+
 
 
 stage('SFDX Validation (check-only)') {
