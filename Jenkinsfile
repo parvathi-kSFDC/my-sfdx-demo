@@ -1,11 +1,9 @@
 pipeline {
   agent any
 
-  // ONE environment block only (global)
   environment {
-    // ensure homebrew/npm and system bin locations are visible to every sh step
     PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${env.PATH}"
-    SFDX_DISABLE_TELEMETRY = '1'
+    SF_DISABLE_TELEMETRY = '1'    // newer env var to avoid telemetry warnings
     PMD_VER = '7.4.0'
   }
 
@@ -29,21 +27,24 @@ pipeline {
           echo "PATH: $PATH"
           node --version || echo "node missing"
           npm --version || echo "npm missing"
-          sfdx --version || echo "sfdx missing"
+          # show both CLIs if present
+          sfdx --version 2>/dev/null || true
+          sf --version 2>/dev/null || true
           java -version || echo "java missing (PMD may fail)"
           jq --version || echo "jq missing"
         '''
       }
     }
 
-    stage('Ensure SFDX CLI') {
+    stage('Ensure SFDX CLI (if needed)') {
       steps {
         sh '''
-          if ! command -v sfdx >/dev/null 2>&1; then
-            echo "Installing sfdx-cli..."
-            npm install -g sfdx-cli@latest --no-audit --no-fund
+          # prefer preinstalled CLI; install only if absolutely missing
+          if ! command -v sfdx >/dev/null 2>&1 && ! command -v sf >/dev/null 2>&1; then
+            echo "No Salesforce CLI found, installing sfdx-cli via npm..."
+            npm install -g sfdx-cli@latest --no-audit --no-fund || { echo "npm install failed"; exit 1; }
           else
-            echo "sfdx present: $(sfdx --version)"
+            echo "Salesforce CLI present."
           fi
         '''
       }
@@ -56,12 +57,17 @@ pipeline {
             export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
             echo "Storing SFDX auth URL to file..."
             echo "$SF_AUTH_URL" > sfdx.auth
-            if ! sfdx auth:sfdxurl:store -f sfdx.auth -s -a CI; then
-              echo "Auth store failed"
-              exit 1
+            if ! sfdx auth:sfdxurl:store -f sfdx.auth -s -a CI 2>/dev/null; then
+              # try 'sf' equivalent (if installed)
+              if command -v sf >/dev/null 2>&1; then
+                echo "sfdx auth failed; attempting sf auth:sfdxurl:store..."
+                sf auth:sfdxurl:store -f sfdx.auth -s -a CI || { echo "Auth store failed (sf)"; exit 1; }
+              else
+                echo "Auth store failed and 'sf' not found"; exit 1
+              fi
             fi
             echo "Authenticated. Listing orgs..."
-            sfdx force:org:list --verbose
+            sfdx force:org:list --verbose 2>/dev/null || sf org list --verbose 2>/dev/null || true
           '''
         }
       }
@@ -70,32 +76,61 @@ pipeline {
     stage('SFDX Validation (check-only)') {
       steps {
         sh '''
-          set -e
+          set +e
           echo "Running check-only deploy (may run tests)..."
-          if ! sfdx force:source:deploy -p force-app --checkonly --testlevel RunLocalTests --json > sfdx-deploy.json 2>/dev/null; then
-            echo "sfdx check-only returned non-zero; saving sfdx-deploy.json (if any)"
+
+          # remove previous files
+          rm -f sfdx-deploy.json sfdx-deploy.stderr
+
+          # Try legacy sfdx command first (most scripts expect this)
+          if command -v sfdx >/dev/null 2>&1; then
+            echo "Using sfdx CLI..."
+            sfdx force:source:deploy -p force-app --checkonly --testlevel RunLocalTests --json > sfdx-deploy.json 2> sfdx-deploy.stderr
+            SFDX_EXIT=$?
+          else
+            # Fallback to 'sf' modern CLI (command names differ)
+            if command -v sf >/dev/null 2>&1; then
+              echo "Using sf CLI fallback..."
+              # Use source-dir or project deploy start depending on installed version
+              # Try sf project deploy start (newer)
+              sf project deploy start --source-dir force-app --check-only --test-level RunLocalTests --json > sfdx-deploy.json 2> sfdx-deploy.stderr
+              SFDX_EXIT=$?
+            else
+              echo "No Salesforce CLI found!" > sfdx-deploy.stderr
+              SFDX_EXIT=127
+            fi
           fi
 
-          if [ -s sfdx-deploy.json ]; then
-            echo "sfdx-deploy.json contents:"
-            cat sfdx-deploy.json
-            FAILS=$(jq -r '.result?.details?.componentFailures // [] | length' sfdx-deploy.json)
-            TE=$(jq -r '.result?.numberTestErrors // 0' sfdx-deploy.json)
-            echo "Component failures: ${FAILS}, Test errors: ${TE}"
-            if [ "${FAILS:-0}" -gt 0 ] || [ "${TE:-0}" -gt 0 ]; then
-              echo "Validation or tests failed. Failing the build."
-              exit 1
-            fi
-          else
-            echo "No sfdx-deploy.json was produced."
+          echo "sfdx exit code: ${SFDX_EXIT:-unknown}"
+          echo "----- sfdx stderr (if any) -----"
+          sed -n '1,200p' sfdx-deploy.stderr || true
+          echo "--------------------------------"
+
+          # If CLI didn't produce JSON, show failure and exit
+          if [ ! -s sfdx-deploy.json ]; then
+            echo "ERROR: sfdx did NOT produce sfdx-deploy.json. See stderr above."
+            echo "Check authentication, CLI version, or whether sfdx crashed."
+            exit 1
+          fi
+
+          # Parse results with jq
+          FAILS=$(jq -r '.result?.details?.componentFailures // [] | length' sfdx-deploy.json)
+          TE=$(jq -r '.result?.numberTestErrors // 0' sfdx-deploy.json)
+          echo "Component failures: ${FAILS}, Test errors: ${TE}"
+
+          if [ "${FAILS:-0}" -gt 0 ] || [ "${TE:-0}" -gt 0 ]; then
+            echo "Validation or tests failed. Failing the build."
+            jq '.' sfdx-deploy.json || true
+            exit 1
           fi
 
           echo "SFDX validation passed (or no failures reported)."
+          set -e
         '''
       }
       post {
         always {
-          archiveArtifacts artifacts: 'sfdx-deploy.json', allowEmptyArchive: true
+          archiveArtifacts artifacts: 'sfdx-deploy.json, sfdx-deploy.stderr', allowEmptyArchive: true
         }
       }
     }
@@ -104,22 +139,16 @@ pipeline {
       steps {
         sh '''
           export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-
-          # Use Homebrew-installed pmd if available, else install
           if ! command -v pmd >/dev/null 2>&1; then
             echo "Installing pmd via brew..."
             brew update || true
             brew install pmd || { echo "brew install pmd failed"; exit 1; }
           else
-            echo "pmd already available: $(pmd --version 2>/dev/null || true)"
+            echo "pmd available: $(pmd --version 2>/dev/null || true)"
           fi
-
           mkdir -p pmd-output
-
-          # Run PMD on Apex classes, generate xml + html reports
           pmd -d force-app/main/default/classes -R rulesets/apex-ruleset.xml -f xml -r pmd-output/pmd-report.xml || true
           pmd -d force-app/main/default/classes -R rulesets/apex-ruleset.xml -f html -r pmd-output/pmd-report.html || true
-
           if [ -f pmd-output/pmd-report.xml ]; then
             echo "PMD XML size: $(wc -c < pmd-output/pmd-report.xml) bytes"
             grep -c "<violation" pmd-output/pmd-report.xml || true
@@ -134,7 +163,7 @@ pipeline {
         }
       }
     }
-  } // end stages
+  }
 
   post {
     always {
@@ -142,7 +171,6 @@ pipeline {
     }
     failure {
       echo "Build failed. Check console output and archived artifacts."
-      // mail step removed to avoid SMTP errors; re-add only if SMTP configured
     }
   }
 }
