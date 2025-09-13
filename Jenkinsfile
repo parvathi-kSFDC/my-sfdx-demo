@@ -5,7 +5,7 @@ pipeline {
   environment {
     // ensure homebrew/npm and system bin locations are visible to every sh step
     PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${env.PATH}"
-    SFDX_DISABLE_TELEMETRY = '1'
+    SF_DISABLE_TELEMETRY = '1'
     PMD_VER = '7.4.0'
   }
 
