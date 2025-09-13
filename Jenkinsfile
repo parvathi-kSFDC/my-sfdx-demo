@@ -93,27 +93,52 @@ stage('SFDX Validation (check-only)') {
     sh '''
       set -e
       mkdir -p reports
+
+      # If the repo has no deployable metadata, skip validation cleanly
+      MD_COUNT=$(find force-app -type f \\( -name "*.cls" -o -name "*.trigger" -o -name "*.xml" -o -name "*.js" -o -name "*.page" -o -name "*.cmp" \\) | wc -l | tr -d ' ')
+      if [ "$MD_COUNT" = "0" ]; then
+        echo "No deployable metadata found in force-app. Skipping validation."
+        echo '{"skipped":true,"reason":"no_metadata"}' > reports/sf-validate.json
+        exit 0
+      fi
+
+      echo "Running check-only validate (RunLocalTests) with sf CLI..."
+      # IMPORTANT: write JSON to file; also capture stderr to a log for debugging
       sf project deploy validate \
         --source-dir force-app \
         --target-org CI \
         --test-level RunLocalTests \
         --ignore-warnings \
         --wait 60 \
-        --json > reports/sf-validate.json || true
+        --json > reports/sf-validate.json 2> reports/sf-validate.stderr || true
 
-      [ -s reports/sf-validate.json ] || { echo "No sf-validate.json produced"; exit 1; }
+      # Ensure JSON exists; if not, fail with stderr context
+      if [ ! -s reports/sf-validate.json ]; then
+        echo "No sf-validate.json produced:"
+        echo "---- stderr ----"
+        tail -n +1 reports/sf-validate.stderr || true
+        exit 1
+      fi
 
       python3 - <<'PY'
 import json, sys
 d=json.load(open('reports/sf-validate.json'))
+# Skip case
+if d.get('skipped'):
+  print("Validation skipped: no metadata.")
+  sys.exit(0)
+
 res=d.get('result',{}) or {}
-success=bool(res.get('success',False)) or res.get('status') in (0,'0')
-det=res.get('details',{}) or {}
-cf=det.get('componentFailures',[])
-if isinstance(cf,dict): cf=[cf]
-rtr=det.get('runTestResult',{}) or {}
-nf=int(rtr.get('numFailures',0) or 0)
-if (not success) or len(cf)>0 or nf>0:
+success = bool(res.get('success', False)) or res.get('status') in (0, '0')
+
+det = res.get('details', {}) or {}
+cf = det.get('componentFailures', [])
+if isinstance(cf, dict): cf=[cf]
+
+rtr = det.get('runTestResult', {}) or {}
+nf = int(rtr.get('numFailures', 0) or 0)
+
+if (not success) or len(cf) > 0 or nf > 0:
   print(f"Validation failed: success={success}, compFailures={len(cf)}, testFailures={nf}")
   sys.exit(1)
 print("Validation OK.")
@@ -122,7 +147,7 @@ PY
   }
   post {
     always {
-      archiveArtifacts artifacts: 'reports/sf-validate.json', allowEmptyArchive: true
+      archiveArtifacts artifacts: 'reports/sf-validate.*', allowEmptyArchive: true
     }
   }
 }
