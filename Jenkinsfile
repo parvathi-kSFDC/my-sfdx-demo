@@ -87,7 +87,6 @@ pipeline {
 }
 
 
-
 stage('SFDX Validation (check-only)') {
   steps {
     sh '''
@@ -103,51 +102,69 @@ stage('SFDX Validation (check-only)') {
       fi
 
       echo "Running check-only validate (RunLocalTests) with sf CLI..."
-      # ⬇️ WRITE JSON TO FILE (also capture stderr to help debugging)
+      # IMPORTANT: capture BOTH stdout (JSON) and stderr (diagnostics)
+      # Increase wait so the job can finish even on a cold org.
+      set +e
       sf project deploy validate \
         --source-dir force-app \
         --target-org CI \
         --test-level RunLocalTests \
         --ignore-warnings \
-        --wait 60 \
-        --json > reports/sf-validate.json 2> reports/sf-validate.stderr || true
+        --api-version 64.0 \
+        --wait 300 \
+        --json > reports/sf-validate.json 2> reports/sf-validate.stderr
+      SF_EXIT=$?
+      set -e
 
-      # Confirm JSON was actually produced (new run)
+      # Show quick summary for debugging
+      if command -v jq >/dev/null 2>&1 && [ -s reports/sf-validate.json ]; then
+        echo "sf validate summary:"
+        jq '{status:.status, message:.message, warnings:.warnings, name:.name, result_success:.result?.success, details_present: (.result?.details!=null)}' reports/sf-validate.json || true
+      fi
+
+      # If JSON missing, print stderr and fail
       if [ ! -s reports/sf-validate.json ]; then
-        echo "No sf-validate.json produced."
-        echo "---- stderr ----"
+        echo "No sf-validate.json produced (sf exit=$SF_EXIT). Stderr follows:"
+        echo "---- reports/sf-validate.stderr ----"
         tail -n +1 reports/sf-validate.stderr || true
         exit 1
       fi
 
-      # (Optional) Show a quick summary in the console
-      if command -v jq >/dev/null 2>&1; then
-        echo "sf validate summary:"
-        jq '{status:.status, result_success:.result.success, details_present: (.result.details!=null)}' reports/sf-validate.json || true
-      fi
-
-      # Robust parse & fail on errors
+      # Robust parse & fail on real failures, but surface CLI errors too
       python3 - <<'PY'
-import json, sys
-d=json.load(open('reports/sf-validate.json'))
-# Skip case
+import json, sys, pathlib
+p = pathlib.Path('reports/sf-validate.json')
+d = json.load(p.open())
+
+# If we explicitly skipped
 if d.get('skipped'):
   print("Validation skipped: no metadata.")
   sys.exit(0)
 
-res = d.get('result', {}) or {}
+status = d.get('status')  # 0 ok, 1 error (CLI-level)
+msg = d.get('message')
+
+res = d.get('result') or {}
 success = bool(res.get('success', False)) or res.get('status') in (0, '0')
+det = (res.get('details') or {})
 
-det = res.get('details', {}) or {}
+# componentFailures may be dict or list
 cf = det.get('componentFailures', [])
-if isinstance(cf, dict): cf=[cf]
+if isinstance(cf, dict): cf = [cf]
 
-rtr = det.get('runTestResult', {}) or {}
-nf = int(rtr.get('numFailures', 0) or 0)
+rtr = det.get('runTestResult') or {}
+num_fail = int(rtr.get('numFailures', 0) or 0)
 
-if (not success) or len(cf) > 0 or nf > 0:
-  print(f"Validation failed: success={success}, compFailures={len(cf)}, testFailures={nf}")
+# If CLI errored (status==1) and no details, print top-level message
+if status == 1 and not det:
+  print(f"CLI error (status=1): {msg or 'No message provided'}")
   sys.exit(1)
+
+# Otherwise, this is a normal validation result — gate on failures
+if (not success) or len(cf) > 0 or num_fail > 0:
+  print(f"Validation failed: success={success}, compFailures={len(cf)}, testFailures={num_fail}")
+  sys.exit(1)
+
 print("Validation OK.")
 PY
     '''
@@ -158,6 +175,7 @@ PY
     }
   }
 }
+
 
 
 stage('Install Java + PMD') {
