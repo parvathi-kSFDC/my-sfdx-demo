@@ -1,5 +1,3 @@
 public with sharing class MyNewClass {
-    public MyNewClass() {
-
-    }
+    public static String ping() { return 'pong'; }
 }
