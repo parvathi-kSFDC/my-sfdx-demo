@@ -94,7 +94,7 @@ stage('SFDX Validation (check-only)') {
       set -e
       mkdir -p reports
 
-      # If the repo has no deployable metadata, skip validation cleanly
+      # Skip if there’s nothing to deploy
       MD_COUNT=$(find force-app -type f \\( -name "*.cls" -o -name "*.trigger" -o -name "*.xml" -o -name "*.js" -o -name "*.page" -o -name "*.cmp" \\) | wc -l | tr -d ' ')
       if [ "$MD_COUNT" = "0" ]; then
         echo "No deployable metadata found in force-app. Skipping validation."
@@ -103,7 +103,7 @@ stage('SFDX Validation (check-only)') {
       fi
 
       echo "Running check-only validate (RunLocalTests) with sf CLI..."
-      # IMPORTANT: write JSON to file; also capture stderr to a log for debugging
+      # ⬇️ WRITE JSON TO FILE (also capture stderr to help debugging)
       sf project deploy validate \
         --source-dir force-app \
         --target-org CI \
@@ -112,14 +112,21 @@ stage('SFDX Validation (check-only)') {
         --wait 60 \
         --json > reports/sf-validate.json 2> reports/sf-validate.stderr || true
 
-      # Ensure JSON exists; if not, fail with stderr context
+      # Confirm JSON was actually produced (new run)
       if [ ! -s reports/sf-validate.json ]; then
-        echo "No sf-validate.json produced:"
+        echo "No sf-validate.json produced."
         echo "---- stderr ----"
         tail -n +1 reports/sf-validate.stderr || true
         exit 1
       fi
 
+      # (Optional) Show a quick summary in the console
+      if command -v jq >/dev/null 2>&1; then
+        echo "sf validate summary:"
+        jq '{status:.status, result_success:.result.success, details_present: (.result.details!=null)}' reports/sf-validate.json || true
+      fi
+
+      # Robust parse & fail on errors
       python3 - <<'PY'
 import json, sys
 d=json.load(open('reports/sf-validate.json'))
@@ -128,7 +135,7 @@ if d.get('skipped'):
   print("Validation skipped: no metadata.")
   sys.exit(0)
 
-res=d.get('result',{}) or {}
+res = d.get('result', {}) or {}
 success = bool(res.get('success', False)) or res.get('status') in (0, '0')
 
 det = res.get('details', {}) or {}
