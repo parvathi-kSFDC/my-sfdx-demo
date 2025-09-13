@@ -177,32 +177,38 @@ PY
 }
 
 
-
 stage('Install Java + PMD') {
   steps {
     sh '''
       set -e
       export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-      echo "=== Check/Install JDK 17 ==="
-      # Apple's stub 'java' exists even when no JDK is installed. Detect real JDK via java_home
-      if ! /usr/libexec/java_home -V >/dev/null 2>&1; then
-        echo "No JDK found. Installing Temurin 17..."
-        brew install --cask temurin17
+      PMD_VERSION="7.4.0"
+      PMD_DIR="${WORKSPACE}/pmd-bin-${PMD_VERSION}"
+
+      echo "=== Ensure JDK 17 ==="
+      # Try to locate JDK 17; install if missing (try multiple cask names)
+      if ! /usr/libexec/java_home -v 17 >/dev/null 2>&1; then
+        echo "JDK 17 not found. Attempting install..."
+        brew update || true
+        brew install --cask temurin17 || brew install --cask temurin@17 || brew install --cask temurin
       fi
 
-      # Prefer an explicit JAVA_HOME for reliability
-      export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+      if ! /usr/libexec/java_home -v 17 >/dev/null 2>&1; then
+        echo "ERROR: JDK 17 still not available after install." >&2
+        exit 1
+      fi
+
+      export JAVA_HOME="$(
+        /usr/libexec/java_home -v 17
+      )"
       echo "JAVA_HOME=$JAVA_HOME"
       "$JAVA_HOME/bin/java" -version
 
-      echo "=== Ensure PMD locally (zip) ==="
-      PMD_VERSION="7.4.0"
+      echo "=== Ensure PMD ${PMD_VERSION} locally ==="
       PMD_ZIP="pmd-dist-${PMD_VERSION}-bin.zip"
-      PMD_DIR="${WORKSPACE}/pmd-bin-${PMD_VERSION}"
-
       if [ ! -d "$PMD_DIR" ]; then
-        echo "Downloading PMD $PMD_VERSION..."
+        echo "Downloading PMD ${PMD_VERSION}..."
         curl -L -o "$PMD_ZIP" "https://github.com/pmd/pmd/releases/download/pmd_releases/${PMD_VERSION}/${PMD_ZIP}"
         unzip -q -o "$PMD_ZIP" -d "${WORKSPACE}"
       fi
@@ -216,16 +222,20 @@ stage('Run PMD (Apex)') {
     sh '''
       set -e
       export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-      export JAVA_HOME=$(/usr/libexec/java_home -v 17)
-      PMD_DIR=$(echo "${WORKSPACE}/pmd-bin-"7.*)
+
+      PMD_VERSION="7.4.0"
+      PMD_DIR="${WORKSPACE}/pmd-bin-${PMD_VERSION}"
+
+      # Ensure Java 17 is active
+      export JAVA_HOME="$(
+        /usr/libexec/java_home -v 17
+      )" || { echo "JDK 17 not found"; exit 1; }
 
       mkdir -p pmd-output
 
-      # pick target dir (fallback if classes folder isn’t present)
       TARGET_DIR="force-app/main/default/classes"
       [ -d "$TARGET_DIR" ] || TARGET_DIR="force-app"
 
-      # If there are zero Apex classes, skip gracefully
       APEX_COUNT=$(find "$TARGET_DIR" -type f -name "*.cls" | wc -l | tr -d ' ')
       if [ "$APEX_COUNT" = "0" ]; then
         echo "No Apex classes found under $TARGET_DIR. Skipping PMD."
@@ -234,9 +244,13 @@ stage('Run PMD (Apex)') {
       fi
 
       RULESET="rulesets/apex-ruleset.xml"
-      [ -f "$RULESET" ] || { echo "Ruleset $RULESET not found"; ls -la rulesets || true; exit 1; }
+      if [ ! -f "$RULESET" ]; then
+        echo "Ruleset $RULESET not found" >&2
+        ls -la rulesets || true
+        exit 1
+      fi
 
-      echo "Running PMD on $APEX_COUNT Apex files..."
+      echo "Running PMD ${PMD_VERSION} on $APEX_COUNT Apex files..."
       "${PMD_DIR}/bin/pmd" check \
         -d "$TARGET_DIR" \
         -R "$RULESET" \
@@ -251,18 +265,19 @@ stage('Run PMD (Apex)') {
 
       VIOL=$(grep -c "<violation" pmd-output/pmd-report.xml || echo 0)
       echo "PMD violations: $VIOL"
-      # Uncomment to fail build on any violations:
+      # To fail on violations, uncomment:
       # [ "$VIOL" -gt 0 ] && { echo "Failing due to PMD violations"; exit 1; }
     '''
   }
   post {
     always {
       archiveArtifacts artifacts: 'pmd-output/*', allowEmptyArchive: false
-      // Remove this unless you’ve installed the "Warnings Next Generation" plugin:
+      // If you use Warnings NG:
       // recordIssues enabledForFailure: true, tools: [pmdParser(pattern: 'pmd-output/pmd-report.xml')]
     }
   }
 }
+
 
 
   } // end stages
