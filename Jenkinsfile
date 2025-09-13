@@ -129,29 +129,40 @@ stage('Install Java + PMD') {
       set -e
       export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-      # --- Ensure Java 17+ ---
-      if ! command -v java >/dev/null 2>&1; then
-        echo "Installing Java 17..."
-        brew install --cask temurin17 || brew install --cask zulu17
+      echo "=== Check/Install JDK 17 ==="
+      # Apple's stub 'java' exists even when no JDK is installed. Detect real JDK via java_home
+      if ! /usr/libexec/java_home -V >/dev/null 2>&1; then
+        echo "No JDK found. Installing Temurin 17..."
+        brew install --cask temurin17
       fi
-      java -version
 
-      # --- Ensure PMD 7.x ---
-      if ! command -v pmd >/dev/null 2>&1; then
-        echo "Installing PMD..."
-        brew install pmd
+      # Prefer an explicit JAVA_HOME for reliability
+      export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+      echo "JAVA_HOME=$JAVA_HOME"
+      "$JAVA_HOME/bin/java" -version
+
+      echo "=== Ensure PMD locally (zip) ==="
+      PMD_VERSION="7.4.0"
+      PMD_ZIP="pmd-dist-${PMD_VERSION}-bin.zip"
+      PMD_DIR="${WORKSPACE}/pmd-bin-${PMD_VERSION}"
+
+      if [ ! -d "$PMD_DIR" ]; then
+        echo "Downloading PMD $PMD_VERSION..."
+        curl -L -o "$PMD_ZIP" "https://github.com/pmd/pmd/releases/download/pmd_releases/${PMD_VERSION}/${PMD_ZIP}"
+        unzip -q -o "$PMD_ZIP" -d "${WORKSPACE}"
       fi
-      pmd --version || true
+      "${PMD_DIR}/bin/pmd" --version
     '''
   }
 }
-
 
 stage('Run PMD (Apex)') {
   steps {
     sh '''
       set -e
       export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+      export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+      PMD_DIR=$(echo "${WORKSPACE}/pmd-bin-"7.*)
 
       mkdir -p pmd-output
 
@@ -159,26 +170,40 @@ stage('Run PMD (Apex)') {
       TARGET_DIR="force-app/main/default/classes"
       [ -d "$TARGET_DIR" ] || TARGET_DIR="force-app"
 
+      # If there are zero Apex classes, skip gracefully
+      APEX_COUNT=$(find "$TARGET_DIR" -type f -name "*.cls" | wc -l | tr -d ' ')
+      if [ "$APEX_COUNT" = "0" ]; then
+        echo "No Apex classes found under $TARGET_DIR. Skipping PMD."
+        echo "<pmd/>" > pmd-output/pmd-report.xml
+        exit 0
+      fi
+
       RULESET="rulesets/apex-ruleset.xml"
       [ -f "$RULESET" ] || { echo "Ruleset $RULESET not found"; ls -la rulesets || true; exit 1; }
 
-      # PMD 7 uses the 'check' subcommand
-      pmd check -d "$TARGET_DIR" -R "$RULESET" -f xml  -r pmd-output/pmd-report.xml  || true
-      pmd check -d "$TARGET_DIR" -R "$RULESET" -f html -r pmd-output/pmd-report.html || true
+      echo "Running PMD on $APEX_COUNT Apex files..."
+      "${PMD_DIR}/bin/pmd" check \
+        -d "$TARGET_DIR" \
+        -R "$RULESET" \
+        -f xml  -r pmd-output/pmd-report.xml
+
+      "${PMD_DIR}/bin/pmd" check \
+        -d "$TARGET_DIR" \
+        -R "$RULESET" \
+        -f html -r pmd-output/pmd-report.html
 
       [ -s pmd-output/pmd-report.xml ] || { echo "PMD XML not produced"; exit 1; }
 
-      # OPTIONAL: fail build on any violations
       VIOL=$(grep -c "<violation" pmd-output/pmd-report.xml || echo 0)
       echo "PMD violations: $VIOL"
-      # uncomment next line if you want failures to break the build
+      # Uncomment to fail build on any violations:
       # [ "$VIOL" -gt 0 ] && { echo "Failing due to PMD violations"; exit 1; }
     '''
   }
   post {
     always {
       archiveArtifacts artifacts: 'pmd-output/*', allowEmptyArchive: false
-      // comment this out unless you install the Warnings NG plugin
+      // Remove this unless you’ve installed the "Warnings Next Generation" plugin:
       // recordIssues enabledForFailure: true, tools: [pmdParser(pattern: 'pmd-output/pmd-report.xml')]
     }
   }
