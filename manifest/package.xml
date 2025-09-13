@@ -1,20 +1,100 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Package xmlns="http://soap.sforce.com/2006/04/metadata">
+    <!-- Apex Classes -->
     <types>
         <members>*</members>
         <name>ApexClass</name>
     </types>
+
+    <!-- Apex Triggers -->
     <types>
         <members>*</members>
         <name>ApexTrigger</name>
     </types>
+
+    <!-- Lightning Components (Aura + LWC) -->
+    <types>
+        <members>*</members>
+        <name>AuraDefinitionBundle</name>
+    </types>
+    <types>
+        <members>*</members>
+        <name>LightningComponentBundle</name>
+    </types>
+
+    <!-- Objects, Fields, Layouts -->
     <types>
         <members>*</members>
         <name>CustomObject</name>
     </types>
     <types>
         <members>*</members>
+        <name>CustomField</name>
+    </types>
+    <types>
+        <members>*</members>
+        <name>Layout</name>
+    </types>
+
+    <!-- Permission Sets and Profiles -->
+    <types>
+        <members>*</members>
         <name>Profile</name>
     </types>
-    <version>59.0</version>
+    <types>
+        <members>*</members>
+        <name>PermissionSet</name>
+    </types>
+
+    <!-- Flows & Processes -->
+    <types>
+        <members>*</members>
+        <name>Flow</name>
+    </types>
+    <types>
+        <members>*</members>
+        <name>FlowDefinition</name>
+    </types>
+
+    <!-- Validation Rules -->
+    <types>
+        <members>*</members>
+        <name>ValidationRule</name>
+    </types>
+
+    <!-- Record Types -->
+    <types>
+        <members>*</members>
+        <name>RecordType</name>
+    </types>
+
+    <!-- Custom Tabs -->
+    <types>
+        <members>*</members>
+        <name>CustomTab</name>
+    </types>
+
+    <!-- Applications -->
+    <types>
+        <members>*</members>
+        <name>CustomApplication</name>
+    </types>
+
+    <!-- Email Templates -->
+    <types>
+        <members>*</members>
+        <name>EmailTemplate</name>
+    </types>
+
+    <!-- Reports & Dashboards -->
+    <types>
+        <members>*</members>
+        <name>Report</name>
+    </types>
+    <types>
+        <members>*</members>
+        <name>Dashboard</name>
+    </types>
+
+    <version>64.0</version>
 </Package>
