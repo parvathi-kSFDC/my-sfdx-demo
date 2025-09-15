@@ -261,20 +261,27 @@ stage('Run PMD (Apex)') {
         --no-fail-on-violation
     '''
   }
-  post {
-    always {
-      archiveArtifacts artifacts: 'pmd-output/*', allowEmptyArchive: false
-      script {
-        def violations = sh(script: "grep -c '<violation' pmd-output/pmd-report.xml || echo 0", returnStdout: true).trim() as Integer
-        if (violations > 0) {
-          //currentBuild.result = 'UNSTABLE'  // PR will pass, but with warning
-          echo "PMD found ${violations} violations – marking build UNSTABLE (see artifacts)."
-        } else {
-          echo "PMD found 0 violations."
-        }
+ post {
+  always {
+    archiveArtifacts artifacts: 'pmd-output/*', allowEmptyArchive: false
+
+    script {
+      // Single command: if grep finds nothing, echo 0
+      def violStr = sh(
+        returnStdout: true,
+        script: "grep -c '<violation' pmd-output/pmd-report.xml 2>/dev/null || echo 0"
+      ).trim()
+
+      echo "PMD violations: ${violStr}"
+
+      // Optional: fail build if violations found
+      if (violStr.isInteger() && violStr.toInteger() > 0) {
+        error("Failing due to ${violStr} PMD violation(s)")
       }
     }
   }
+}
+
 }
 
 
