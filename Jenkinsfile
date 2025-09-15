@@ -261,21 +261,39 @@ stage('Run PMD (Apex)') {
         --no-fail-on-violation
     '''
   }
-  post {
-    always {
-      archiveArtifacts artifacts: 'pmd-output/*', allowEmptyArchive: false
-      script {
-        def violations = sh(script: "grep -c '<violation' pmd-output/pmd-report.xml || echo 0", returnStdout: true).trim() as Integer
-        if (violations > 0) {
-          //currentBuild.result = 'UNSTABLE'  // PR will pass, but with warning
-          echo "PMD found ${violations} violations – marking build UNSTABLE (see artifacts)."
-        } else {
-          echo "PMD found 0 violations."
-        }
-      }
+ post {
+  always {
+    archiveArtifacts artifacts: 'pmd-output/*', allowEmptyArchive: true
+    script {
+      // Produce ONE clean number for the count
+      def violStr = sh(
+        returnStdout: true,
+        script: '''
+          if [ -s pmd-output/pmd-report.xml ]; then
+            # Count <violation occurrences; wc -l always exits 0 and prints a single number
+            grep -o "<violation" pmd-output/pmd-report.xml | wc -l | tr -d " "
+          else
+            echo 0
+          fi
+        '''
+      ).trim()
+
+      echo "PMD violations: ${violStr}"
+
+      // If you want to BLOCK the build on violations:
+      // if (violStr.isInteger() && violStr.toInteger() > 0) {
+      //   error("Failing due to ${violStr} PMD violation(s)")
+      // }
+
+      // If you prefer to pass the build but mark it UNSTABLE instead:
+      // if (violStr.isInteger() && violStr.toInteger() > 0) {
+      //   currentBuild.result = 'UNSTABLE'
+      //   echo "Marking build UNSTABLE due to ${violStr} PMD violation(s)"
+      // }
     }
   }
 }
+
 
 
 
