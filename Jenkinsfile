@@ -306,6 +306,20 @@ stage('Run PMD (Apex)') {
     failure {
       echo "Build failed. Check console output and archived artifacts."
       // mail step removed to avoid SMTP errors; re-add only if SMTP configured
-    }
+   
+  failure {
+    echo "Build failed. Sending email..."
+    emailext(
+      subject: "Jenkins Build Failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+      body: """<p>Build <b>${env.JOB_NAME} #${env.BUILD_NUMBER}</b> has failed.</p>
+               <p><b>Branch:</b> ${env.BRANCH_NAME}</p>
+               <p><b>Commit:</b> ${env.GIT_COMMIT}</p>
+               <p><a href="${env.BUILD_URL}">Click here to view the build logs</a></p>""",
+      to: "parvathik997@example.com"
+    )
   }
 }
+
+    }
+  
+
