@@ -1,122 +1,187 @@
-# Copado Source Format Pipeline – Exercises
+## 🔀 Handling Metadata Conflicts
 
-This repository documents three exercises for implementing DevOps best practices with Salesforce using **Copado Source Format Pipeline (SFP)**:
+Salesforce metadata often changes in shared components like Profiles, Layouts, or Flows.  
+To minimize and resolve conflicts:
 
-1. Setting Up a Source Format Pipeline  
-2. Committing Changes in Source Format  
-3. Deploying Changes with Quality Gates  
+1. Use **SFDX source format** to split large files (reduces overlap).  
+2. Always **merge latest develop** before opening PRs.  
+3. Resolve conflicts manually using Git’s conflict markers.  
+4. Validate merged metadata with `sf project deploy validate`.  
+5. Rely on **Jenkins PR builds** to catch issues early.  
 
----
+➡️ This ensures stable merges and prevents broken deployments to higher environments.
 
-## 1. Setting Up a Source Format Pipeline
 
-### Description
-Create and configure a new **Salesforce Source Format Pipeline** in the Copado Playground. The pipeline uses Salesforce DX (SFDX) source format to manage metadata in a modular, source-driven way.
+PR Validation with Jenkins (SFDX)
 
-### Requirements
-- Access to **Copado Playground** (via setup wizard or provided org).  
-- A connected **Git repository** (e.g., GitHub/Bitbucket) with permissions.  
-- Familiarity with Salesforce orgs (scratch orgs or sandboxes).  
-- Basic Copado knowledge (Fundamentals certification recommended).  
+Validate every pull request (PR) with a Jenkins pipeline that runs a check-only deploy to Salesforce and fails fast on test or metadata errors.
 
-### Steps
-1. Go to **Copado Setup → Pipelines → New Pipeline**.  
-2. Select **Source Format Pipeline**.  
-3. Add environments (e.g., `Development`, `QA`).  
-4. Connect each environment to its Salesforce org credential.  
-5. Link the pipeline to your Git branch (SFDX repo).  
-6. Validate pipeline → ensure no errors in Copado logs.  
+🧰 Prerequisites
 
-### Expected Outcomes
-- A fully functional Source Format Pipeline with Dev → QA flow.  
-- Pipeline connected to GitHub with initial metadata in SFDX format.  
-- Successful connection validation (no errors/warnings).  
+GitHub repo in SFDX source format (force-app/...)
 
-### Assessment
-- Show pipeline creation in Copado UI.  
-- Submit screenshots of **pipeline overview**, **environments**, and **Git integration**.  
-- Demonstrate pipeline ID or logs confirming setup.  
-- Answer quiz on pipeline components (environments, credentials, Git repo).  
+Branches: main, develop, and feature/*
 
----
+Jenkins with:
 
-## 2. Committing Changes in Source Format
+Multibranch Pipeline job using GitHub Branch Source (or Pipeline + GHPRB plugin)
 
-### Description
-Make a metadata change in a Salesforce dev org, convert it into **SFDX source format**, and commit it to Git via Copado. Focus on **atomic commits** (one change per commit) and maintaining clean structure.
+A GitHub Personal Access Token credential for checkout
 
-### Requirements
-- Copado Playground with an existing Source Format Pipeline.  
-- Tools like **Salesforce Developer Console** or **VS Code + SFDX CLI**.  
-- Git account with push permissions.  
-- Basic Git + SFDX knowledge.  
+A secret text credential SF_AUTH_URL (org auth file content)
 
-### Steps
-1. In **Dev org**, make a change (e.g., add custom field or update layout).  
-2. In Copado, go to **User Story → Commit Changes**.  
-3. Select the changed components.  
-4. Commit to GitHub (stored in `force-app/main/default/...`).  
-5. Verify the commit in GitHub history with a clear message.  
+(Optional) Email Extension Plugin for notifications
 
-### Expected Outcomes
-- Metadata changes successfully converted & committed in SFDX format.  
-- Commit visible in GitHub history with descriptive commit message.  
-- No conflicts or formatting issues (e.g., XML well-formed).  
+GitHub webhook from the repo → your Jenkins URL (fires on PR + push)
 
-### Assessment
-- Show commit details in GitHub (diff view).  
-- Validate folder structure (SFDX format).  
-- Ensure commit messages follow best practices (e.g., `US-1234 | Added custom field to Account`).  
-- Provide commit hash or repository link for inspection.  
+🔒 Branch Protection (GitHub)
 
----
+Protect main and develop:
 
-## 3. Deploying Changes with Quality Gates
+Require Pull Request before merging
 
-### Description
-Promote and deploy the committed changes through the **Source Format Pipeline** (Dev → QA). Use **quality gates** to simulate CI/CD with quality assurance.  
+Require status checks to pass: the Jenkins build context (e.g., continuous-integration/jenkins/pr-head)
 
-Quality Gates to configure:  
-1. **PMD check** for static code analysis.  
-2. **85% Apex test coverage**.  
-3. **PR approval** (via GitHub or Copado).  
+(Optional) Require code review approvals
 
-### Requirements
-- Completed pipeline setup + committed changes.  
-- At least 2 connected Salesforce orgs (Dev + QA).  
-- PMD ruleset configured in Copado.  
-- Apex tests in the org.  
-- GitHub PR approval workflow enabled.  
+🔁 Workflow (What happens on every PR)
 
-### Steps
-1. In Copado, go to the **User Story** → **Promote to QA**.  
-2. Pipeline runs:  
-   - Validate deployment with Apex tests.  
-   - Run PMD static analysis.  
-   - Check for PR approval.  
-3. Only after passing all gates does deployment proceed.  
+Developer creates/updates a PR from feature/* → develop (or main).
 
-### Expected Outcomes
-- Changes promoted successfully from Dev → QA.  
-- PMD passes with no critical violations.  
-- Apex test coverage ≥ 85%.  
-- PR approval completed.  
-- Changes visible in QA org (e.g., custom field appears in Setup).  
+GitHub sends a webhook → Jenkins.
 
-### Assessment
-- Show **Deployment Results** in Copado dashboard (logs + Quality Gate results).  
-- Open **PMD scan report** (highlight rule checks).  
-- Validate test coverage in Copado report.  
-- Show PR approval in GitHub/Copado logs.  
-- Demonstrate deployed change in QA org.  
-- Submit deployment notes (conflicts, results, quality gates).  
-- Explain why quality gates are important in CI/CD.  
+Jenkins discovers the PR branch and runs Jenkinsfile:
 
----
+Checks out code
 
-# ✅ Summary
-- **Pipeline Setup** → Provides a structured flow (Dev → QA) with Git integration.  
-- **Commit Process** → Ensures clean, traceable changes in SFDX format.  
-- **Quality Gates Deployment** → Enforces static analysis (PMD), test coverage, and approvals before deployment.  
+Ensures Salesforce CLI
 
-Together, these exercises demonstrate a **full Copado SFP workflow** for secure, automated Salesforce DevOps.
+Authenticates using SF_AUTH_URL
+
+Runs check-only validation with RunLocalTests
+
+Fails on component/test errors
+
+Jenkins reports status back to GitHub:
+
+✅ Success → PR can be merged
+
+❌ Failed → PR blocked until fixed
+
+(Optional) Jenkins emails failure details to the team.
+
+🧪 What the Pipeline Validates
+
+Deployability of all changed metadata (no missing deps)
+
+Apex tests (RunLocalTests) compile + pass
+
+Basic org checks (e.g., API version) via sf project deploy validate
+
+
+PMD Static Code Analysis (Apex)
+
+This repository integrates PMD into the Jenkins pipeline to provide instant code quality feedback for Apex classes.
+
+🧰 Prerequisites
+
+Jenkins agent with:
+
+Java 17+
+
+curl + unzip
+
+PMD ruleset file: rulesets/apex-ruleset.xml (in repo)
+
+pmd.yml pipeline definition
+
+⚙️ Workflow
+
+On every PR or commit to the develop branch:
+
+Jenkins checks out the repo
+
+Installs Java + PMD
+
+Runs PMD on all Apex classes under force-app/main/default/classes
+
+Generates reports:
+
+pmd-report.xml (machine-readable, CI tools)
+
+pmd-report.html (human-friendly)
+
+Uploads reports as build artifacts
+
+GitHub PR → Jenkins → status check shows ✅ (clean) or ❌ (violations).
+
+📄 Example pmd.yml
+pipeline:
+  agent any
+  stages:
+    - stage: Checkout
+      steps:
+        - checkout scm
+
+    - stage: Install Java + PMD
+      steps:
+        - sh: |
+            set -e
+            PMD_VERSION="7.4.0"
+            PMD_DIR="pmd-bin-${PMD_VERSION}"
+            if [ ! -d "$PMD_DIR" ]; then
+              curl -L -o pmd.zip \
+                "https://github.com/pmd/pmd/releases/download/pmd_releases/${PMD_VERSION}/pmd-dist-${PMD_VERSION}-bin.zip"
+              unzip -q pmd.zip
+            fi
+            $PMD_DIR/bin/pmd --version
+
+    - stage: Run PMD
+      steps:
+        - sh: |
+            set -e
+            mkdir -p pmd-output
+            TARGET="force-app/main/default/classes"
+            RULESET="rulesets/apex-ruleset.xml"
+            $PMD_DIR/bin/pmd check \
+              -d "$TARGET" \
+              -R "$RULESET" \
+              -f xml -r pmd-output/pmd-report.xml
+            $PMD_DIR/bin/pmd check \
+              -d "$TARGET" \
+              -R "$RULESET" \
+              -f html -r pmd-output/pmd-report.html
+
+    - stage: Archive Report
+      steps:
+        - archiveArtifacts: "pmd-output/*"
+
+✅ Expected Outcomes
+
+Jenkins job automatically runs on pull requests and develop commits.
+
+PMD violations are visible in pmd-output/pmd-report.html.
+
+PRs blocked until Jenkins status check is ✅ (if branch protection is enabled).
+
+📚 Usage Notes
+
+For Developers:
+
+Run PMD locally before pushing:
+
+./pmd-bin-7.4.0/bin/pmd check \
+  -d force-app/main/default/classes \
+  -R rulesets/apex-ruleset.xml \
+  -f text
+
+
+Fix violations before raising a PR.
+
+For Reviewers:
+
+Check Jenkins artifacts (pmd-report.html) for violations when reviewing PRs.
+
+For Admins:
+
+Customize rules in rulesets/apex-ruleset.xml (e.g., avoid empty catch blocks, enforce naming conventions).
