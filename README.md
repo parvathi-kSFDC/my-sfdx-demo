@@ -12,6 +12,7 @@ To minimize and resolve conflicts:
 ➡️ This ensures stable merges and prevents broken deployments to higher environments.
 
 
+
 PR Validation with Jenkins (SFDX)
 
 Validate every pull request (PR) with a Jenkins pipeline that runs a check-only deploy to Salesforce and fails fast on test or metadata errors.
